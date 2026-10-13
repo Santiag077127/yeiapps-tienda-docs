@@ -1,0 +1,30 @@
+# Decisiones cerradas y condiciones fuera del modelo
+
+## Estado
+
+No quedan decisiones pendientes que bloqueen el modelo conceptual, lógico o físico PostgreSQL del MVP. Las decisiones de alcance y persistencia se cierran en este documento y en sus reglas normativas. Las condiciones de operación indicadas al final se configuran antes de operar, pero no requieren nuevas tablas ni cambian las columnas del modelo.
+
+## Decisiones cerradas para el MVP
+
+1. **Alcance funcional.** Los CU-001 a CU-036 tienen fase explícita en [[Alcance-MVP]]. Seller compra con Wallet y administra clientes; Customer consulta servicios propios. No hay HUs inventadas.
+2. **Moneda.** Una instalación usa un único código ISO 4217 que fija el operador de despliegue antes de crear Wallet. Se copia a Wallet, Order, OrderItem, PriceListItem y WalletTransaction; Seller no puede cambiarlo y no hay conversión. Wallet inicia en cero.
+3. **Fecha de negocio.** `store.business_timezone` es obligatoria por despliegue y define `businessDate`. No se infiere una zona por usuario. Subscription guarda fechas `date`, no timestamps ni un estado mutable de expiración.
+4. **Cantidad y atomicidad.** `quantity` es un entero positivo; una unidad genera exactamente una Subscription y una asignación inicial al confirmar. Todo se confirma o se revierte. Línea de renovación/continuidad tiene `quantity = 1` y referencia su período previo.
+5. **Suscripción.** Duración entera positiva en días vive en OrderItem; `startDate` inclusiva, `expirationDate` exclusiva y `expirationDate = startDate + serviceDurationDays`. La compra confirmada comienza en la fecha de negocio de confirmación. Estado `ACTIVE`/`EXPIRED` derivado de fechas; no existe Subscription `PENDING` ni job de transición.
+6. **Renovación/continuidad.** OrderItem conserva `previousSubscriptionId` incluso en estado PENDING; Subscription confirmada copia el vínculo. Confirmar requiere `businessDate >= previousSubscription.expirationDate`; `startDate = max(expirationDate anterior, businessDate)`, sin pagos ni asignaciones futuras. El vínculo exige mismo Customer/Product y un único sucesor confirmado. Si conserva recurso, se transfiere en la misma transacción; de lo contrario, se asigna recurso elegible y el anterior queda retenido para reacondicionamiento.
+7. **Cancelaciones.** Seller comprador o Admin puede cancelar una Order `PENDING`, con razón. No se cancela una Order confirmada ni Subscription confirmada en el MVP. El actor, hora y razón se guardan en AuditEvent; no se duplican como campos `cancelled_at`, `cancelled_by` o `cancellation_reason`. Una compensación financiera es un movimiento Wallet separado; no modifica Order ni Subscription.
+8. **Reportes.** “Venta” es Order CONFIRMED con Customer beneficiary; “compra” es Order CONFIRMED cuyo buyer es Seller; bruto confirmado es `sum(quantity × unitPrice)`, por moneda y `confirmedAt`. “Ingresos operacionales” solo rotula ese bruto, no margen ni ingreso contable. Vencimientos consultan rango de `expirationDate`; movimientos usan `occurredAt`. Se calculan con consultas del backend, sin tablas de reporte ni vistas materializadas.
+9. **Credenciales por Platform.** Account admite alta administrativa con credenciales pendientes; para elegibilidad exige `login_identifier`, `secret_payload` cifrado y metadatos no secretos requeridos por contrato de Platform. El contrato/versionado y su validador pertenecen a aplicación/configuración; `credential_metadata` es opcional JSONB no secreto. Esto no amplía el esquema por proveedor.
+10. **Auditoría.** AuditEvent append-only registra actor/instante/objeto/acción/cambios no sensibles y lecturas de credenciales. WalletTransaction y ResourceAssignmentHistory son registros canónicos del importe y la asignación. La liberación guarda actor y motivo en ambos contextos.
+11. **Autenticación y roles.** Se persiste `password_hash` adaptativo; nunca contraseña en claro. No se persisten sesiones, refresh tokens ni secretos de firma. Access token de vida corta se valida en backend y no es registro de negocio. Recuperación, MFA, sesiones revocables y permisos dinámicos quedan fuera del MVP. Roles cerrados `ADMIN`, `SELLER`, `CUSTOMER` mediante UserRole.
+12. **Normalización.** No se persiste stock ni disponibilidad. Wallet.balance es saldo materializado derivado del ledger y protegido por transacción. Los snapshots de User/OrderItem preservan historia. OrderItem.previousSubscriptionId conserva el objetivo de una orden pendiente y Subscription.previousSubscriptionId registra la sucesión confirmada; la transacción exige que coincidan.
+
+## Fuera del MVP o configuración operativa
+
+- **Configuración antes de operar:** el operador debe suministrar `store.currency_code` y `store.business_timezone`; cada Platform publicada debe tener un contrato de credenciales validado. Son valores/configuración del despliegue, no decisiones que bloqueen el diseño de tablas.
+- **Política de retención legal y archivo:** no se implementa borrado automático. AuditEvent es append-only para la aplicación y no contiene secretos; plazos legales, archivo externo y eliminación/pseudonimización privilegiada se resolverán antes de producción conforme a la política aplicable. No cambian el modelo lógico MVP.
+- **Fase futura:** compra directa de Customer, gateway/Payment, reembolsos externos, Customer como comprador de renovaciones, cancelación anticipada de Subscription confirmada, recuperación de contraseña, MFA, sesiones/refresh tokens persistidos, multidivisa y automatización de reacondicionamiento/renovación.
+
+## Fuente funcional
+
+Los Casos de Uso constituyen la fuente funcional de referencia para el MVP mientras no exista un backlog formal de Historias de Usuario. No se añaden entidades ni operaciones fuera de CU-001–CU-036 y las reglas explícitas que los hacen persistibles.
